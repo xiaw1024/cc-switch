@@ -2193,7 +2193,8 @@
     "switcherTooltip": {
       "claude": "Projects: switch the Claude Code provider / MCP / Skills / memory files in one click",
       "claude-desktop": "Projects: switch the Claude Desktop provider in one click",
-      "codex": "Projects: switch the Codex provider / MCP / Skills / memory files in one click"
+      "codex": "Projects: switch the Codex provider / MCP / Skills / memory files in one click",
+      "gemini": "Projects: switch the Antigravity CLI provider / MCP / Skills / memory files in one click"
     },
     "none": "No project",
     "searchPlaceholder": "Search projects",
@@ -2202,7 +2203,8 @@
     "createDescription": {
       "claude": "Save the current Claude Code provider, MCP, Skills and memory file as a project you can switch to later.",
       "claude-desktop": "Save the current Claude Desktop provider as a project you can switch to later.",
-      "codex": "Save the current Codex provider, MCP, Skills and memory file configuration as a project you can switch to later."
+      "codex": "Save the current Codex provider, MCP, Skills and memory file configuration as a project you can switch to later.",
+      "gemini": "Save the current Antigravity CLI provider, MCP, Skills, and prompt configuration as a project you can switch to later."
     },
     "manage": "Manage projects…",
     "manageTitle": "Manage Projects",
