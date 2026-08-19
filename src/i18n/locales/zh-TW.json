@@ -2195,7 +2195,7 @@
       "claude": "專案：一鍵切換 Claude Code 的供應商 / MCP / Skills / 記憶檔案",
       "claude-desktop": "專案：一鍵切換 Claude Desktop 的供應商",
       "codex": "專案：一鍵切換 Codex 的供應商 / MCP / Skills / 記憶檔案",
-      "gemini": "專案：一鍵切換 Antigravity CLI 的供應商 / MCP / Skills / Prompt"
+      "gemini": "專案：一鍵切換 Gemini CLI 的供應商 / MCP / Skills / Prompt"
     },
     "none": "不使用專案",
     "searchPlaceholder": "搜尋專案",
@@ -2205,7 +2205,7 @@
       "claude": "把 Claude Code 目前的供應商、MCP、Skills、記憶檔案儲存為一個專案，之後可一鍵切換。",
       "claude-desktop": "把 Claude Desktop 目前的供應商儲存為一個專案，之後可一鍵切換。",
       "codex": "把 Codex 目前的供應商、MCP、Skills 和記憶檔案設定儲存為一個專案，之後可一鍵切換。",
-      "gemini": "把 Antigravity CLI 目前的供應商、MCP、Skills 和 Prompt 設定儲存為一個專案，之後可一鍵切換。"
+      "gemini": "把 Gemini CLI 目前的供應商、MCP、Skills 和 Prompt 設定儲存為一個專案，之後可一鍵切換。"
     },
     "manage": "管理專案…",
     "manageTitle": "管理專案",

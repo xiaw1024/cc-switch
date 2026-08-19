@@ -393,6 +393,124 @@ fn shared_profile_sides_are_isolated_and_mergeable() {
 }
 
 #[test]
+fn uncaptured_gemini_profile_preserves_takeover_live_and_backup() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let home = ensure_test_home();
+    let state = create_test_state().expect("create test state");
+
+    let gemini_dir = home.join(".gemini");
+    fs::create_dir_all(&gemini_dir).expect("create .gemini dir");
+    let env_path = gemini_dir.join(".env");
+    let takeover_live =
+        "GEMINI_API_KEY=PROXY_MANAGED\nGOOGLE_GEMINI_BASE_URL=http://127.0.0.1:15721";
+    fs::write(&env_path, takeover_live).expect("seed takeover live env");
+
+    let backup_json = r#"{"GEMINI_API_KEY":"original-key"}"#;
+    futures::executor::block_on(state.db.save_live_backup("gemini", backup_json))
+        .expect("save gemini live backup");
+    let mut proxy_config = futures::executor::block_on(state.db.get_proxy_config_for_app("gemini"))
+        .expect("get gemini proxy config");
+    proxy_config.enabled = true;
+    futures::executor::block_on(state.db.update_proxy_config_for_app(proxy_config))
+        .expect("enable gemini takeover flag");
+
+    // 模拟新增 Gemini Profile 支持前保存的 payload：完全没有 gemini 槽位。
+    let profile = cc_switch_lib::Profile {
+        id: "legacy-project".to_string(),
+        name: "Legacy Project".to_string(),
+        payload: r#"{"providers":{"claude":"p1"}}"#.to_string(),
+        sort_order: None,
+        created_at: Some(1_000),
+        updated_at: Some(1_000),
+    };
+    state
+        .db
+        .save_profile(&profile)
+        .expect("save legacy profile");
+
+    let (warnings, should_stop_proxy) =
+        ProfileService::apply(&state, &profile.id, ProfileScope::Gemini)
+            .expect("apply legacy project to gemini scope");
+
+    assert_eq!(warnings.len(), 1, "uncaptured scope yields one hint");
+    assert!(warnings[0].contains("no gemini configuration captured"));
+    assert!(!should_stop_proxy, "uncaptured apply must not stop proxy");
+    assert_eq!(
+        fs::read_to_string(&env_path).expect("read gemini live env"),
+        takeover_live,
+        "gemini live env must remain untouched"
+    );
+    assert!(
+        futures::executor::block_on(state.db.get_proxy_config_for_app("gemini"))
+            .expect("reload gemini proxy config")
+            .enabled,
+        "gemini takeover flag must remain enabled"
+    );
+    assert_eq!(
+        futures::executor::block_on(state.db.get_live_backup("gemini"))
+            .expect("reload gemini backup")
+            .expect("gemini backup remains")
+            .original_config,
+        backup_json,
+        "gemini live backup must remain untouched"
+    );
+    assert_eq!(
+        state
+            .db
+            .get_current_profile_id("gemini")
+            .expect("get gemini current profile")
+            .as_deref(),
+        Some(profile.id.as_str())
+    );
+}
+
+#[test]
+fn gemini_profile_with_no_prompt_clears_later_enabled_prompt() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let home = ensure_test_home();
+    let state = create_test_state().expect("create test state");
+
+    let profile = ProfileService::create(&state, "No Prompt", ProfileScope::Gemini)
+        .expect("create gemini profile without prompt");
+    let payload: ProfilePayload =
+        serde_json::from_str(&profile.payload).expect("parse gemini profile payload");
+    assert_eq!(
+        payload.prompts.gemini.as_deref(),
+        Some(""),
+        "empty sentinel means captured with no enabled prompt"
+    );
+
+    state
+        .db
+        .save_prompt(AppType::Gemini.as_str(), &prompt("gemini-prompt", false))
+        .expect("save gemini prompt");
+    PromptService::enable_prompt(&state, AppType::Gemini, "gemini-prompt")
+        .expect("enable gemini prompt");
+
+    let prompt_path = home.join(".gemini/GEMINI.md");
+    assert!(!fs::read_to_string(&prompt_path)
+        .expect("read enabled gemini prompt")
+        .is_empty());
+
+    let (warnings, _) = ProfileService::apply(&state, &profile.id, ProfileScope::Gemini)
+        .expect("apply no-prompt gemini profile");
+    assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+    let prompts = state
+        .db
+        .get_prompts(AppType::Gemini.as_str())
+        .expect("reload gemini prompts");
+    assert!(!prompts["gemini-prompt"].enabled);
+    assert_eq!(
+        fs::read_to_string(&prompt_path).expect("read cleared gemini prompt"),
+        "",
+        "no-prompt snapshot clears the live prompt"
+    );
+}
+
+#[test]
 fn profile_apply_reports_dangling_references_and_continues() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();

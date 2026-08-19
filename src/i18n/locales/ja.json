@@ -2194,7 +2194,7 @@
       "claude": "プロジェクト：Claude Code のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え",
       "claude-desktop": "プロジェクト：Claude Desktop のプロバイダーをワンクリックで切り替え",
       "codex": "プロジェクト：Codex のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え",
-      "gemini": "プロジェクト：Antigravity CLI のプロバイダー / MCP / Skills / Prompt をワンクリックで切り替え"
+      "gemini": "プロジェクト：Gemini CLI のプロバイダー / MCP / Skills / Prompt をワンクリックで切り替え"
     },
     "none": "プロジェクトを使用しない",
     "searchPlaceholder": "プロジェクトを検索",
@@ -2204,7 +2204,7 @@
       "claude": "Claude Code の現在のプロバイダー、MCP、Skills、メモリファイルをプロジェクトとして保存し、後からワンクリックで切り替えられます。",
       "claude-desktop": "Claude Desktop の現在のプロバイダーをプロジェクトとして保存し、後からワンクリックで切り替えられます。",
       "codex": "Codex の現在のプロバイダー、MCP、Skills、メモリファイルの設定をプロジェクトとして保存し、後からワンクリックで切り替えられます。",
-      "gemini": "Antigravity CLI の現在のプロバイダー、MCP、Skills、Prompt の設定をプロジェクトとして保存し、後からワンクリックで切り替えられます。"
+      "gemini": "Gemini CLI の現在のプロバイダー、MCP、Skills、Prompt の設定をプロジェクトとして保存し、後からワンクリックで切り替えられます。"
     },
     "manage": "プロジェクトを管理…",
     "manageTitle": "プロジェクト管理",

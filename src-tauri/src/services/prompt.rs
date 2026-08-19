@@ -190,6 +190,16 @@ impl PromptService {
         Ok(())
     }
 
+    /// 禁用该应用的所有 Prompt，并将空状态投影到 live 文件。
+    pub fn disable_all_prompts(state: &AppState, app: AppType) -> Result<(), AppError> {
+        let mut prompts = state.db.get_prompts(app.as_str())?;
+        for prompt in prompts.values_mut().filter(|prompt| prompt.enabled) {
+            prompt.enabled = false;
+            state.db.save_prompt(app.as_str(), prompt)?;
+        }
+        Self::sync_to_live(state, app)
+    }
+
     pub fn import_from_file(state: &AppState, app: AppType) -> Result<String, AppError> {
         let content = if matches!(app, AppType::Pi) {
             PiAgentsFileGuard::acquire()?

@@ -9,7 +9,7 @@
 //! - 供应商：`ProviderService::switch`（内建代理接管热切换与接管下禁切官方）
 //! - MCP：`McpService::toggle_app`（改标志 + 单 server 物化）
 //! - Skills：`SkillService::toggle_app`（改标志 + 单 skill 物化）
-//! - Prompt：`PromptService::enable_prompt`（互斥激活 + 原子写 live）
+//! - Prompt：`PromptService::enable_prompt` / `disable_all_prompts`（互斥激活 + 原子写 live）
 //!
 //! apply 为 best-effort：单项失败收集为 warning 继续，不整体回滚。
 
@@ -137,7 +137,8 @@ pub struct ProfilePayload {
     pub mcp: PerApp<Option<Vec<String>>>,
     /// 每 app 启用的 Skill id 集合
     pub skills: PerApp<Option<Vec<String>>>,
-    /// 每 app 激活的 prompt id
+    /// 每 app 激活的 prompt id；空字符串表示已捕获但没有启用的 Prompt，
+    /// None 表示旧 payload/该 app 从未捕获，应用时不触碰 Prompt。
     pub prompts: PerApp<Option<String>>,
 }
 
@@ -234,12 +235,17 @@ impl ProfileService {
                 );
             }
             if let Some(slot) = payload.prompts.get_mut(app) {
-                *slot = state
-                    .db
-                    .get_prompts(app.as_str())?
-                    .values()
-                    .find(|p| p.enabled)
-                    .map(|p| p.id.clone());
+                if !matches!(app, AppType::ClaudeDesktop) {
+                    *slot = Some(
+                        state
+                            .db
+                            .get_prompts(app.as_str())?
+                            .values()
+                            .find(|p| p.enabled)
+                            .map(|p| p.id.clone())
+                            .unwrap_or_default(),
+                    );
+                }
             }
         }
         Ok(payload)
@@ -366,6 +372,10 @@ impl ProfileService {
                 "no {} configuration captured in this project yet; marked as current without changes (it will be saved automatically when you switch away)",
                 scope.as_str()
             ));
+            state
+                .db
+                .set_current_profile_id(scope.as_str(), Some(profile_id))?;
+            return Ok((warnings, false));
         }
 
         for app in scope.apps().iter() {
@@ -442,21 +452,27 @@ impl ProfileService {
                 }
             }
 
-            // 5. Prompt（None = 不动；已激活则幂等跳过，避免无谓的文件写与备份）
+            // 5. Prompt（None = 旧 payload 未捕获，不动；空字符串 = 已捕获但未启用）
             if let Some(Some(target_prompt)) = payload.prompts.get(app) {
-                let prompts = state.db.get_prompts(app_str)?;
-                match prompts.get(target_prompt) {
-                    None => warnings.push(format!(
-                        "[{app_str}] prompt '{target_prompt}' no longer exists, skipped"
-                    )),
-                    Some(p) if p.enabled => {}
-                    Some(_) => {
-                        if let Err(e) =
-                            PromptService::enable_prompt(state, app.clone(), target_prompt)
-                        {
-                            warnings.push(format!(
-                                "[{app_str}] enable prompt '{target_prompt}' failed: {e}"
-                            ));
+                if target_prompt.is_empty() {
+                    if let Err(e) = PromptService::disable_all_prompts(state, app.clone()) {
+                        warnings.push(format!("[{app_str}] disable all prompts failed: {e}"));
+                    }
+                } else {
+                    let prompts = state.db.get_prompts(app_str)?;
+                    match prompts.get(target_prompt) {
+                        None => warnings.push(format!(
+                            "[{app_str}] prompt '{target_prompt}' no longer exists, skipped"
+                        )),
+                        Some(p) if p.enabled => {}
+                        Some(_) => {
+                            if let Err(e) =
+                                PromptService::enable_prompt(state, app.clone(), target_prompt)
+                            {
+                                warnings.push(format!(
+                                    "[{app_str}] enable prompt '{target_prompt}' failed: {e}"
+                                ));
+                            }
                         }
                     }
                 }
@@ -538,6 +554,10 @@ mod tests {
         assert_eq!(back.prompts.codex, None);
         assert_eq!(back.prompts.gemini, None);
         assert_eq!(back.skills.gemini, None);
+
+        let legacy_null: ProfilePayload =
+            serde_json::from_str(r#"{"prompts":{"gemini":null}}"#).unwrap();
+        assert_eq!(legacy_null.prompts.gemini, None, "old null stays untouched");
 
         let empty: ProfilePayload = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, ProfilePayload::default());
