@@ -1,0 +1,231 @@
+name: Sync upstream and release Linux DEB
+
+on:
+  schedule:
+    - cron: "37 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream-linux-deb
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_URL: https://github.com/farion1231/cc-switch.git
+  UPSTREAM_BRANCH: main
+
+jobs:
+  sync:
+    name: Sync upstream
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    outputs:
+      commit_sha: ${{ steps.sync.outputs.commit_sha }}
+      should_build: ${{ steps.sync.outputs.should_build }}
+      should_publish: ${{ steps.sync.outputs.should_publish }}
+      tag: ${{ steps.sync.outputs.tag }}
+      version: ${{ steps.sync.outputs.version }}
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream
+        id: sync
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          git remote add upstream "$UPSTREAM_URL"
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+
+          updated=false
+          if ! git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
+            upstream_version=$(git show "upstream/$UPSTREAM_BRANCH:package.json" | jq -r .version)
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git merge --no-edit \
+              -m "chore(sync): 同步 upstream/main 至 v${upstream_version}" \
+              "upstream/$UPSTREAM_BRANCH"
+            git push origin HEAD:main
+            updated=true
+          fi
+
+          version=$(jq -r .version package.json)
+          tauri_version=$(jq -r .version src-tauri/tauri.conf.json)
+          cargo_version=$(awk -F '"' '/^version = "/ { print $2; exit }' src-tauri/Cargo.toml)
+          upstream_version=$(git show "upstream/$UPSTREAM_BRANCH:package.json" | jq -r .version)
+
+          if [[ -z "$version" || "$version" == "null" ]]; then
+            echo "::error::Unable to read the version from package.json."
+            exit 1
+          fi
+          if [[ "$version" != "$upstream_version" || "$version" != "$tauri_version" || "$version" != "$cargo_version" ]]; then
+            echo "::error::Version mismatch: package=$version upstream=$upstream_version tauri=$tauri_version cargo=$cargo_version"
+            exit 1
+          fi
+
+          tag="v$version"
+          release_exists=false
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            release_exists=true
+          fi
+
+          should_build=false
+          should_publish=false
+          if [[ "$release_exists" == "false" ]]; then
+            should_build=true
+            should_publish=true
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            should_build=true
+          fi
+
+          if [[ "$should_publish" == "true" ]] && git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            tag_sha=$(git rev-list -n 1 "$tag")
+            head_sha=$(git rev-parse HEAD)
+            if [[ "$tag_sha" != "$head_sha" ]]; then
+              echo "::error::Tag $tag already points to $tag_sha instead of $head_sha."
+              exit 1
+            fi
+          fi
+
+          echo "commit_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+          echo "should_publish=$should_publish" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "updated=$updated release_exists=$release_exists build=$should_build publish=$should_publish"
+
+  build:
+    name: Build Linux DEB
+    needs: sync
+    if: needs.sync.outputs.should_build == 'true'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout synced commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.sync.outputs.commit_sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "20"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@a5f673d0ba8626c3977bb416a1612774bc82181b # 1.95.0
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            file \
+            libayatana-appindicator3-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            pkg-config
+          sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.1-dev \
+            || sudo apt-get install -y --no-install-recommends libwebkit2gtk-4.0-dev
+          sudo apt-get install -y --no-install-recommends libsoup-3.0-dev \
+            || sudo apt-get install -y --no-install-recommends libsoup2.4-dev
+
+      - name: Setup pnpm
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        run: |
+          corepack enable
+          corepack install
+          pnpm --version
+
+      - name: Get pnpm store directory
+        id: pnpm-store
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: linux-pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: linux-pnpm-
+
+      - name: Cache Cargo
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: linux-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: linux-cargo-
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build DEB
+        run: |
+          rm -rf src-tauri/target/release/bundle/deb
+          pnpm tauri build --bundles deb --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+      - name: Prepare DEB asset
+        id: asset
+        shell: bash
+        env:
+          VERSION: ${{ needs.sync.outputs.version }}
+        run: |
+          set -euo pipefail
+          deb=$(find src-tauri/target/release/bundle/deb -maxdepth 1 -type f -name '*.deb' -print -quit)
+          if [[ -z "$deb" ]]; then
+            echo "::error::No DEB package was generated."
+            exit 1
+          fi
+          mkdir -p release-assets
+          asset="release-assets/CC-Switch-v${VERSION}-Linux-x86_64.deb"
+          cp "$deb" "$asset"
+          echo "path=$asset" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: CC-Switch-${{ needs.sync.outputs.tag }}-Linux-x86_64-deb
+          path: ${{ steps.asset.outputs.path }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    needs: [sync, build]
+    if: needs.sync.outputs.should_publish == 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - name: Download DEB artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: CC-Switch-${{ needs.sync.outputs.tag }}-Linux-x86_64-deb
+          path: release-assets
+
+      - name: Publish GitHub Release
+        env:
+          ASSET: release-assets/CC-Switch-${{ needs.sync.outputs.tag }}-Linux-x86_64.deb
+          COMMIT_SHA: ${{ needs.sync.outputs.commit_sha }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.sync.outputs.tag }}
+        run: |
+          gh release create "$TAG" "$ASSET" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$COMMIT_SHA" \
+            --title "CC Switch $TAG Linux DEB" \
+            --notes "自动同步 farion1231/cc-switch 并构建的 Linux x86_64 DEB 安装包。"
