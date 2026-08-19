@@ -35,14 +35,16 @@ pub enum ProfileScope {
     #[serde(rename = "claude-desktop")]
     ClaudeDesktop,
     Codex,
+    Gemini,
 }
 
 impl ProfileScope {
     /// 全部分组（扩展新分组时同步扩展 apps/for_app 与前端 scope.ts 镜像）
-    pub const ALL: [ProfileScope; 3] = [
+    pub const ALL: [ProfileScope; 4] = [
         ProfileScope::Claude,
         ProfileScope::ClaudeDesktop,
         ProfileScope::Codex,
+        ProfileScope::Gemini,
     ];
 
     pub fn as_str(&self) -> &'static str {
@@ -50,6 +52,7 @@ impl ProfileScope {
             ProfileScope::Claude => "claude",
             ProfileScope::ClaudeDesktop => "claude-desktop",
             ProfileScope::Codex => "codex",
+            ProfileScope::Gemini => "gemini",
         }
     }
 
@@ -58,6 +61,7 @@ impl ProfileScope {
             "claude" => Ok(ProfileScope::Claude),
             "claude-desktop" => Ok(ProfileScope::ClaudeDesktop),
             "codex" => Ok(ProfileScope::Codex),
+            "gemini" => Ok(ProfileScope::Gemini),
             other => Err(AppError::InvalidInput(format!(
                 "Unknown profile scope: {other}"
             ))),
@@ -70,6 +74,7 @@ impl ProfileScope {
             ProfileScope::Claude => &[AppType::Claude],
             ProfileScope::ClaudeDesktop => &[AppType::ClaudeDesktop],
             ProfileScope::Codex => &[AppType::Codex],
+            ProfileScope::Gemini => &[AppType::Gemini],
         }
     }
 
@@ -79,6 +84,7 @@ impl ProfileScope {
             AppType::Claude => Some(ProfileScope::Claude),
             AppType::ClaudeDesktop => Some(ProfileScope::ClaudeDesktop),
             AppType::Codex => Some(ProfileScope::Codex),
+            AppType::Gemini => Some(ProfileScope::Gemini),
             _ => None,
         }
     }
@@ -92,6 +98,7 @@ pub struct PerApp<T> {
     #[serde(rename = "claude-desktop")]
     pub claude_desktop: T,
     pub codex: T,
+    pub gemini: T,
 }
 
 impl<T> PerApp<T> {
@@ -100,6 +107,7 @@ impl<T> PerApp<T> {
             AppType::Claude => Some(&self.claude),
             AppType::ClaudeDesktop => Some(&self.claude_desktop),
             AppType::Codex => Some(&self.codex),
+            AppType::Gemini => Some(&self.gemini),
             _ => None,
         }
     }
@@ -109,6 +117,7 @@ impl<T> PerApp<T> {
             AppType::Claude => Some(&mut self.claude),
             AppType::ClaudeDesktop => Some(&mut self.claude_desktop),
             AppType::Codex => Some(&mut self.codex),
+            AppType::Gemini => Some(&mut self.gemini),
             _ => None,
         }
     }
@@ -480,21 +489,25 @@ mod tests {
                 claude: Some("p1".into()),
                 claude_desktop: Some("d1".into()),
                 codex: None,
+                gemini: Some("g1".into()),
             },
             mcp: PerApp {
                 claude: Some(ids(&["m1", "m2"])),
                 claude_desktop: Some(vec![]),
                 codex: None,
+                gemini: Some(ids(&["m3"])),
             },
             skills: PerApp {
                 claude: Some(vec![]),
                 claude_desktop: Some(vec![]),
                 codex: Some(ids(&["s1"])),
+                gemini: Some(vec![]),
             },
             prompts: PerApp {
                 claude: None,
                 claude_desktop: None,
                 codex: Some("pr1".into()),
+                gemini: Some("pr2".into()),
             },
         };
         let json = serde_json::to_string(&payload).unwrap();
@@ -502,6 +515,7 @@ mod tests {
         assert!(json.contains("\"claude\""));
         assert!(json.contains("\"claude-desktop\""));
         assert!(json.contains("\"codex\""));
+        assert!(json.contains("\"gemini\""));
         let back: ProfilePayload = serde_json::from_str(&json).unwrap();
         assert_eq!(back, payload);
     }
@@ -516,10 +530,14 @@ mod tests {
         assert_eq!(back.providers.claude, Some("p1".to_string()));
         assert_eq!(back.providers.claude_desktop, None);
         assert_eq!(back.providers.codex, None);
+        assert_eq!(back.providers.gemini, None);
         assert_eq!(back.mcp.claude, Some(ids(&["m1"])));
         assert_eq!(back.mcp.claude_desktop, None);
         assert_eq!(back.mcp.codex, None, "missing slot means untouched");
+        assert_eq!(back.mcp.gemini, None);
         assert_eq!(back.prompts.codex, None);
+        assert_eq!(back.prompts.gemini, None);
+        assert_eq!(back.skills.gemini, None);
 
         let empty: ProfilePayload = serde_json::from_str("{}").unwrap();
         assert_eq!(empty, ProfilePayload::default());
@@ -533,11 +551,13 @@ mod tests {
                 claude: Some("p1".into()),
                 claude_desktop: Some("d1".into()),
                 codex: Some("c1".into()),
+                gemini: Some("g1".into()),
             },
             mcp: PerApp {
                 claude: Some(ids(&["m1"])),
                 claude_desktop: Some(vec![]),
                 codex: Some(ids(&["m9"])),
+                gemini: Some(ids(&["m10"])),
             },
             ..Default::default()
         };
@@ -547,11 +567,13 @@ mod tests {
                 claude: Some("p2".into()),
                 claude_desktop: None,
                 codex: Some("SHOULD-NOT-LEAK".into()),
+                gemini: Some("SHOULD-NOT-LEAK".into()),
             },
             mcp: PerApp {
                 claude: Some(ids(&["m2"])),
                 claude_desktop: Some(vec![]),
                 codex: None,
+                gemini: None,
             },
             ..Default::default()
         };
@@ -564,9 +586,37 @@ mod tests {
             "claude-desktop slot is in its own scope, untouched by claude merge"
         );
         assert_eq!(payload.mcp.claude, Some(ids(&["m2"])));
-        // codex 侧完好：既没被覆盖也没被 fresh 的值污染
+        // codex 和 gemini 侧完好：既没被覆盖也没被 fresh 的值污染
         assert_eq!(payload.providers.codex, Some("c1".to_string()));
         assert_eq!(payload.mcp.codex, Some(ids(&["m9"])));
+        assert_eq!(payload.providers.gemini, Some("g1".to_string()));
+        assert_eq!(payload.mcp.gemini, Some(ids(&["m10"])));
+
+        // 测试 Gemini 侧合并
+        let mut payload_gemini = payload.clone();
+        let fresh_gemini = ProfilePayload {
+            providers: PerApp {
+                claude: Some("LEAK".into()),
+                claude_desktop: Some("LEAK".into()),
+                codex: Some("LEAK".into()),
+                gemini: Some("g2".into()),
+            },
+            mcp: PerApp {
+                claude: Some(ids(&["LEAK"])),
+                claude_desktop: Some(ids(&["LEAK"])),
+                codex: Some(ids(&["LEAK"])),
+                gemini: Some(ids(&["m11"])),
+            },
+            ..Default::default()
+        };
+        payload_gemini.merge_scope_from(&fresh_gemini, ProfileScope::Gemini);
+
+        // Gemini 更新了，其余没变
+        assert_eq!(payload_gemini.providers.gemini, Some("g2".to_string()));
+        assert_eq!(payload_gemini.mcp.gemini, Some(ids(&["m11"])));
+
+        assert_eq!(payload_gemini.providers.codex, Some("c1".to_string()));
+        assert_eq!(payload_gemini.providers.claude, Some("p2".to_string()));
     }
 
     #[test]
@@ -575,18 +625,26 @@ mod tests {
         assert!(!payload.scope_captured(ProfileScope::Claude));
         assert!(!payload.scope_captured(ProfileScope::ClaudeDesktop));
         assert!(!payload.scope_captured(ProfileScope::Codex));
+        assert!(!payload.scope_captured(ProfileScope::Gemini));
 
         // 只拍过 claude 组（哪怕拍到的是空集）
         payload.mcp.claude = Some(vec![]);
         assert!(payload.scope_captured(ProfileScope::Claude));
         assert!(!payload.scope_captured(ProfileScope::ClaudeDesktop));
         assert!(!payload.scope_captured(ProfileScope::Codex));
+        assert!(!payload.scope_captured(ProfileScope::Gemini));
 
         // Desktop 槽位属于独立的 claude-desktop 组
         let mut desktop_only = ProfilePayload::default();
         desktop_only.providers.claude_desktop = Some("d1".into());
         assert!(desktop_only.scope_captured(ProfileScope::ClaudeDesktop));
         assert!(!desktop_only.scope_captured(ProfileScope::Claude));
+
+        // Gemini 组
+        let mut gemini_only = ProfilePayload::default();
+        gemini_only.skills.gemini = Some(vec![]);
+        assert!(gemini_only.scope_captured(ProfileScope::Gemini));
+        assert!(!gemini_only.scope_captured(ProfileScope::Codex));
     }
 
     #[test]
@@ -595,7 +653,7 @@ mod tests {
         assert!(per.get(&AppType::Claude).is_some());
         assert!(per.get(&AppType::ClaudeDesktop).is_some());
         assert!(per.get(&AppType::Codex).is_some());
-        assert!(per.get(&AppType::Gemini).is_none());
+        assert!(per.get(&AppType::Gemini).is_some());
     }
 
     #[test]
@@ -608,7 +666,6 @@ mod tests {
             );
             assert_eq!(ProfileScope::parse(scope.as_str()).unwrap(), scope);
         }
-        assert!(ProfileScope::parse("gemini").is_err());
         assert!(ProfileScope::parse("").is_err());
     }
 
@@ -622,12 +679,12 @@ mod tests {
             &[AppType::ClaudeDesktop]
         );
         assert_eq!(ProfileScope::Codex.apps(), &[AppType::Codex]);
+        assert_eq!(ProfileScope::Gemini.apps(), &[AppType::Gemini]);
         for scope in ProfileScope::ALL {
             for app in scope.apps() {
                 assert_eq!(ProfileScope::for_app(app), Some(scope));
             }
         }
-        assert_eq!(ProfileScope::for_app(&AppType::Gemini), None);
     }
 
     #[test]
